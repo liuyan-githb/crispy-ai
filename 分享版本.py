@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import base64
 import json
+import os
 from io import BytesIO
 from PIL import Image
 
@@ -16,9 +17,6 @@ st.set_page_config(
 # ========== 自定义CSS ==========
 st.markdown("""
 <style>
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
-    ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
     .reasoning-box {
         background-color: #f0f2f6;
         border-left: 4px solid #ff4b4b;
@@ -31,10 +29,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ========== 标题区 ==========
-st.title("👑 脆脆大王")
-st.markdown("我是一个可爱又聪明的AI助手，叫我脆脆大王就好啦！")
-
 # ========== API Key ==========
 if "API_KEY" not in st.secrets:
     st.error("⚠️ 请在 Streamlit Secrets 中配置 API_KEY")
@@ -43,72 +37,102 @@ API_KEY = st.secrets["API_KEY"]
 URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 MODEL = "glm-4v-plus"
 
-# ========== 初始化 session_state ==========
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": "你是脆脆大王👑，一个友好、幽默、乐于助人的AI助手。请始终以脆脆大王的身份回应，语气活泼可爱。"}
-    ]
-if "count" not in st.session_state:
-    st.session_state.count = 0
-if "queries" not in st.session_state:
-    st.session_state.queries = []
-if "upload_key" not in st.session_state:
-    st.session_state.upload_key = 0
-if "history_loaded" not in st.session_state:
-    st.session_state.history_loaded = False
+# ========== 数据存储目录 ==========
+DATA_DIR = "user_data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 
-# ========== 从 localStorage 加载历史（仅在首次加载时执行一次） ==========
-if not st.session_state.history_loaded:
-    # 检查 URL 中是否有历史数据（由 JS 在页面加载时写入）
-    if "history" in st.query_params:
-        try:
-            history_json = st.query_params["history"]
-            history_data = json.loads(history_json)
-            st.session_state.messages = history_data.get("messages", [
-                {"role": "system", "content": "你是脆脆大王👑，一个友好、幽默、乐于助人的AI助手。请始终以脆脆大王的身份回应，语气活泼可爱。"}
-            ])
-            st.session_state.count = history_data.get("count", 0)
-            st.session_state.queries = history_data.get("queries", [])
-        except Exception as e:
-            st.error(f"历史数据解析失败: {e}")
-        # 清除 URL 参数，避免重复加载
-        st.query_params.clear()
-        st.session_state.history_loaded = True
-        st.rerun()
-    else:
-        # 如果没有 history 参数，则尝试从 localStorage 读取并通过 URL 参数传递
-        st.markdown("""
-        <script>
-        (function() {
-            const saved = localStorage.getItem('crispy_ai_history');
-            if (saved) {
-                // 如果当前 URL 没有 history 参数，则添加并刷新页面
-                const urlParams = new URLSearchParams(window.location.search);
-                if (!urlParams.has('history')) {
-                    const encoded = encodeURIComponent(saved);
-                    window.location.href = window.location.pathname + '?history=' + encoded;
-                }
-            } else {
-                // 没有历史数据，直接标记已加载（避免无限循环）
-                const urlParams = new URLSearchParams(window.location.search);
-                if (!urlParams.has('loaded')) {
-                    window.location.href = window.location.pathname + '?loaded=true';
-                }
+def get_user_data_file(username):
+    return os.path.join(DATA_DIR, f"{username}.json")
+
+def load_user_data(username):
+    file_path = get_user_data_file(username)
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+def save_user_data(username, data):
+    file_path = get_user_data_file(username)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ========== 登录管理 ==========
+def login():
+    st.sidebar.title("🔐 登录")
+    username = st.sidebar.text_input("用户名")
+    password = st.sidebar.text_input("密码", type="password")
+    login_btn = st.sidebar.button("登录/注册")
+    if login_btn:
+        if username.strip() == "":
+            st.sidebar.error("用户名不能为空")
+            return False
+        # 简单验证：允许任意密码（或可设置统一密码）
+        # 这里设置统一密码为 "123456" 或允许空密码，根据需求修改
+        # 为了安全，可以设置复杂密码，或从 secrets 读取
+        # 此处简单起见：密码固定为 "crispy2026"
+        if password != "crispy2026":
+            st.sidebar.error("密码错误")
+            return False
+        # 加载用户数据
+        user_data = load_user_data(username)
+        if user_data is None:
+            # 新用户，初始化空数据
+            user_data = {
+                "queries": [],
+                "count": 0,
+                "messages": [{"role": "system", "content": "你是脆脆大王👑，一个友好、幽默、乐于助人的AI助手。请始终以脆脆大王的身份回应，语气活泼可爱。"}]
             }
-        })();
-        </script>
-        """, unsafe_allow_html=True)
-        # 如果没有历史数据且没有 loaded 参数，则添加 loaded 参数后刷新
-        if "loaded" not in st.query_params:
-            st.query_params["loaded"] = "true"
-            st.rerun()
-        else:
-            # 已加载过，标记完成
-            st.session_state.history_loaded = True
-            st.query_params.clear()
-            st.rerun()
+            save_user_data(username, user_data)
+        # 存入 session_state
+        st.session_state.logged_in = True
+        st.session_state.username = username
+        st.session_state.messages = user_data["messages"]
+        st.session_state.count = user_data["count"]
+        st.session_state.queries = user_data["queries"]
+        st.session_state.upload_key = 0
+        st.rerun()
+    return False
 
-# ========== 侧边栏 ==========
+def logout():
+    # 登出前保存数据
+    if st.session_state.get("logged_in"):
+        user_data = {
+            "queries": st.session_state.queries,
+            "count": st.session_state.count,
+            "messages": st.session_state.messages
+        }
+        save_user_data(st.session_state.username, user_data)
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.rerun()
+
+# ========== 主程序 ==========
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    # 显示登录界面
+    st.title("👑 脆脆大王")
+    st.markdown("请登录以使用聊天功能")
+    login()
+    st.stop()
+else:
+    # 已登录，显示侧边栏用户信息和登出按钮
+    with st.sidebar:
+        st.write(f"👤 用户：{st.session_state.username}")
+        if st.button("🚪 登出", use_container_width=True):
+            logout()
+        st.markdown("---")
+    # 初始化其他状态
+    if "upload_key" not in st.session_state:
+        st.session_state.upload_key = 0
+
+# ========== 标题区 ==========
+st.title("👑 脆脆大王")
+st.markdown("我是一个可爱又聪明的AI助手，叫我脆脆大王就好啦！")
+
+# ========== 侧边栏统计和历史 ==========
 with st.sidebar:
     st.header("📊 统计")
     st.metric("询问次数", st.session_state.count)
@@ -126,11 +150,16 @@ with st.sidebar:
         st.session_state.count = 0
         st.session_state.queries = []
         st.session_state.upload_key += 1
-        # 清除 localStorage
-        st.markdown("<script>localStorage.removeItem('crispy_ai_history');</script>", unsafe_allow_html=True)
+        # 保存到文件
+        user_data = {
+            "queries": st.session_state.queries,
+            "count": st.session_state.count,
+            "messages": st.session_state.messages
+        }
+        save_user_data(st.session_state.username, user_data)
         st.rerun()
     st.caption("💡 支持 JPG/PNG 图片，最大 200MB")
-    st.caption("📌 所有对话自动保存在此浏览器中，关闭页面后再打开依然可见")
+    st.caption("📌 历史记录保存在服务器上，登录即可访问")
 
 # ========== 聊天记录显示 ==========
 for msg in st.session_state.messages:
@@ -249,6 +278,14 @@ if prompt or uploaded_file:
                 # 重置上传组件
                 st.session_state.upload_key += 1
                 
+                # 保存到文件
+                user_data = {
+                    "queries": st.session_state.queries,
+                    "count": st.session_state.count,
+                    "messages": st.session_state.messages
+                }
+                save_user_data(st.session_state.username, user_data)
+                
             except requests.exceptions.Timeout:
                 st.error("⏰ 网络超时，请稍后再试")
             except requests.exceptions.ConnectionError:
@@ -263,17 +300,4 @@ if prompt or uploaded_file:
             except Exception as e:
                 st.error(f"❌ 未知错误：{e}")
             finally:
-                # 每次对话完成后，立即保存当前历史到 localStorage
-                history_data = {
-                    "queries": st.session_state.queries,
-                    "count": st.session_state.count,
-                    "messages": [msg for msg in st.session_state.messages if msg["role"] != "system"]
-                }
-                json_str = json.dumps(history_data, ensure_ascii=False)
-                # 使用 JavaScript 保存到 localStorage
-                st.markdown(f"""
-                <script>
-                localStorage.setItem('crispy_ai_history', `{json_str}`);
-                </script>
-                """, unsafe_allow_html=True)
                 st.rerun()
